@@ -41,3 +41,21 @@
     }}
 
 {% endmacro %}
+
+{#
+    -- Caution: This macro is potentially destructive. It should
+    --          only be used inside of a transaction
+#}
+{% macro postgres__get_merge_sql(target, source, unique_key, dest_columns) -%}
+
+    delete from {{ target }} as DBT_INTERNAL_DEST
+    using {{ source }} as DBT_INTERNAL_SOURCE
+    where DBT_INTERNAL_DEST.{{ unique_key }} = DBT_INTERNAL_SOURCE.{{ unique_key }};
+
+    insert into {{ target }} (
+      {{ column_list(dest_columns) }}
+    )
+    select {{ column_list(dest_columns) }}
+    from {{ source }} as DBT_INTERNAL_SOURCE
+
+{% endmacro %}

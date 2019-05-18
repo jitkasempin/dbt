@@ -22,6 +22,7 @@ import dbt.task.generate as generate_task
 import dbt.task.serve as serve_task
 import dbt.task.freshness as freshness_task
 import dbt.task.run_operation as run_operation_task
+from dbt.task.list import ListTask
 from dbt.task.rpc_server import RPCServerTask
 from dbt.adapters.factory import reset_adapters
 
@@ -92,8 +93,8 @@ def main(args=None):
         exit_code = e.code
 
     except BaseException as e:
-        logger.info("Encountered an error:")
-        logger.info(str(e))
+        logger.warn("Encountered an error:")
+        logger.warn(str(e))
 
         if logger_initialized():
             logger.debug(traceback.format_exc())
@@ -132,6 +133,9 @@ def initialize_config_values(parsed):
 
     if cfg.use_colors:
         dbt.ui.printer.use_colors()
+
+    if cfg.printer_width:
+        dbt.ui.printer.printer_width(cfg.printer_width)
 
 
 def handle_and_check(args):
@@ -183,6 +187,7 @@ def run_from_args(parsed):
     log_cache_events(getattr(parsed, 'log_cache_events', False))
     update_flags(parsed)
 
+    parsed.cls.pre_init_hook()
     logger.info("Running with dbt{}".format(dbt.version.installed))
 
     # this will convert DbtConfigErrors into RuntimeExceptions
@@ -204,7 +209,6 @@ def run_from_args(parsed):
 
 
 def update_flags(parsed):
-    flags.NON_DESTRUCTIVE = getattr(parsed, 'non_destructive', False)
     flags.USE_CACHE = getattr(parsed, 'use_cache', True)
 
     arg_drop_existing = getattr(parsed, 'drop_existing', False)
@@ -422,14 +426,6 @@ def _add_selection_arguments(*subparsers):
 def _add_table_mutability_arguments(*subparsers):
     for sub in subparsers:
         sub.add_argument(
-            '--non-destructive',
-            action='store_true',
-            help="""
-            If specified, DBT will not drop views. Tables will be truncated
-            instead of dropped.
-            """
-        )
-        sub.add_argument(
             '--full-refresh',
             action='store_true',
             help="""
@@ -578,6 +574,53 @@ def _build_rpc_subparser(subparsers, base_subparser):
     return sub
 
 
+def _build_list_subparser(subparsers, base_subparser):
+    sub = subparsers.add_parser(
+        'list',
+        parents=[base_subparser],
+        help='list models'
+    )
+    sub.set_defaults(cls=ListTask, which='list')
+    resource_values = list(ListTask.ALL_RESOURCE_VALUES) + ['default', 'all']
+    sub.add_argument('--resource-type',
+                     choices=resource_values,
+                     action='append',
+                     default=[],
+                     dest='resource_types')
+    sub.add_argument('--output',
+                     choices=['json', 'name', 'path', 'selector'],
+                     default='selector')
+    sub.add_argument(
+        '-s',
+        '--select',
+        required=False,
+        nargs='+',
+        metavar='SELECTOR',
+        help="Specify the nodes to select.",
+    )
+    sub.add_argument(
+        '-m',
+        '--models',
+        required=False,
+        nargs='+',
+        metavar='SELECTOR',
+        help="Specify the models to select and set the resource-type to "
+              "'model'. Mutually exclusive with '--select' (or '-s') and "
+              "'--resource-type'",
+    )
+    sub.add_argument(
+        '--exclude',
+        required=False,
+        nargs='+',
+        metavar='SELECTOR',
+        help="Specify the models to exclude."
+    )
+    # in python 3.x you can use the 'aliases' kwarg, but in python 2.7 you get
+    # to do this
+    subparsers._name_parser_map['ls'] = sub
+    return sub
+
+
 def parse_args(args):
     p = DBTArgumentParser(
         prog='dbt: data build tool',
@@ -654,14 +697,15 @@ def parse_args(args):
 
     # make the subcommands that have their own subcommands
     docs_sub = _build_docs_subparser(subs, base_subparser)
-    docs_subs = docs_sub.add_subparsers()
+    docs_subs = docs_sub.add_subparsers(title="Available sub-commands")
     source_sub = _build_source_subparser(subs, base_subparser)
-    source_subs = source_sub.add_subparsers()
+    source_subs = source_sub.add_subparsers(title="Available sub-commands")
 
     _build_init_subparser(subs, base_subparser)
     _build_clean_subparser(subs, base_subparser)
     _build_debug_subparser(subs, base_subparser)
     _build_deps_subparser(subs, base_subparser)
+    _build_list_subparser(subs, base_subparser)
 
     archive_sub = _build_archive_subparser(subs, base_subparser)
     rpc_sub = _build_rpc_subparser(subs, base_subparser)
@@ -675,7 +719,7 @@ def parse_args(args):
     # --models, --exclude
     _add_selection_arguments(run_sub, compile_sub, generate_sub, test_sub,
                              archive_sub)
-    # --full-refresh, --non-destructive
+    # --full-refresh
     _add_table_mutability_arguments(run_sub, compile_sub)
 
     _build_seed_subparser(subs, base_subparser)

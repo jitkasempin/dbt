@@ -198,7 +198,14 @@
   {%- set strategy = config.get('strategy') -%}
   {%- set unique_key = config.get('unique_key') %}
 
-  {{ create_schema(target_database, target_schema) }}
+  {% set information_schema = api.Relation.create(
+    database=target_database,
+    schema=target_schema,
+    identifier=target_table).information_schema() %}
+
+  {% if not check_schema_exists(information_schema, target_schema) %}
+    {{ create_schema(target_database, target_schema) }}
+  {% endif %}
 
   -- TODO : Can we clean this up?
   {%- set target_relation = adapter.get_relation(

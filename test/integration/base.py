@@ -9,7 +9,7 @@ import json
 from datetime import datetime
 from functools import wraps
 
-from nose.plugins.attrib import attr
+import pytest
 from mock import patch
 
 import dbt.flags as flags
@@ -562,7 +562,7 @@ class DBTIntegrationTest(unittest.TestCase):
 
         sql = self.transform_sql(query, kwargs=kwargs)
 
-        with self.test_connection(connection_name) as conn:
+        with self.get_connection(connection_name) as conn:
             logger.debug('test connection "{}" executing: {}'.format(conn.name, sql))
             if self.adapter_type == 'bigquery':
                 return self.run_sql_bigquery(sql, fetch)
@@ -600,7 +600,9 @@ class DBTIntegrationTest(unittest.TestCase):
                   and ({table_filter})
                 order by column_name asc"""
 
-        db_string = '' if database is None else database + '.'
+        db_string = ''
+        if database:
+            db_string = self.quote_as_configured(database, 'database') + '.'
 
         table_filters_s = " OR ".join(
             self._ilike('table_name', table.replace('"', ''))
@@ -631,7 +633,7 @@ class DBTIntegrationTest(unittest.TestCase):
         return (table_name, column_name, data_type, char_size)
 
     @contextmanager
-    def test_connection(self, name=None):
+    def get_connection(self, name=None):
         """Create a test connection context where all executed macros, etc will
         get self.adapter as the adapter.
 
@@ -645,7 +647,7 @@ class DBTIntegrationTest(unittest.TestCase):
                 yield conn
 
     def get_relation_columns(self, relation):
-        with self.test_connection():
+        with self.get_connection():
             columns = self.adapter.get_columns_in_relation(relation)
 
         return sorted(((c.name, c.dtype, c.char_size) for c in columns),
@@ -811,7 +813,7 @@ class DBTIntegrationTest(unittest.TestCase):
 
             specs.append(relation)
 
-        with self.test_connection():
+        with self.get_connection():
             column_specs = self.get_many_relation_columns(specs)
 
         # make sure everyone has equal column definitions
@@ -998,7 +1000,7 @@ def use_profile(profile_name):
             self.assertEqual(self.adapter_type, 'snowflake')
     """
     def outer(wrapped):
-        @attr(type=profile_name)
+        @getattr(pytest.mark, 'profile_'+profile_name)
         @wraps(wrapped)
         def func(self, *args, **kwargs):
             return wrapped(self, *args, **kwargs)

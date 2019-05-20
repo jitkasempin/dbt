@@ -80,7 +80,11 @@
 
     {% set primary_key = config['unique_key'] %}
     {% set scd_id_expr %}
-        {# TODO : USE REAL HASH #}
+        md5(
+            concat({% for col in check_cols %}
+                cast({{ col }} as text) {% if not loop.last %} , {% endif %}
+
+            {% endfor %})
         md5(cast({{ primary_key }} as text) || cast({{ 'name' }} as text))
     {% endset %}
 

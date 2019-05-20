@@ -71,12 +71,12 @@
                 DBT_INTERNAL_SOURCE.{{ column.name }} {%- if not loop.last %}, {%- endif %}
             {%- endfor %}
             from {{ source }} as DBT_INTERNAL_SOURCE
-            left join (
-                select *,
-                    1 as __dbt_merge_key
-                from {{ target }}
-            ) as DBT_INTERNAL_DEST on {{ merge_on }}
-            where DBT_INTERNAL_DEST.__dbt_merge_key is null;
+            where not exists(
+                select *
+                from {{ target }} as DBT_INTERNAL_DEST
+                where {{ merge_on }}
+            )
+            ;
         {% else %}
             {% do exceptions.raise_compiler_error("The specified merge clause for " ~ target ~ " is not supported:\n" ~ clause) %}
         {% endif %}

@@ -80,7 +80,8 @@
 
     {% set primary_key = config['unique_key'] %}
     {% set scd_id_expr %}
-        md5(cast({{ primary_key }} as text) || cast({{ 'name' }} as text)) {# TODO : USE REAL HASH ? #}
+        {# TODO : USE REAL HASH #}
+        md5(cast({{ primary_key }} as text) || cast({{ 'name' }} as text))
     {% endset %}
 
     {% do return({
@@ -126,8 +127,10 @@
 
         from source_data
         join archived_data on archived_data.dbt_pk = source_data.dbt_pk
-        where archived_data.dbt_updated_at < source_data.dbt_updated_at
-          and archived_data.dbt_valid_to is null
+        where archived_data.dbt_valid_to is null
+          and (
+            {{ strategy.row_changed }}
+          )
     )
 
     select * from updates
@@ -164,13 +167,16 @@
 
         select
             source_data.*
+
         from source_data
         left outer join archived_data on archived_data.dbt_pk = source_data.dbt_pk
         where archived_data.dbt_pk is null
            or (
                 archived_data.dbt_pk is not null
-            and archived_data.dbt_updated_at < source_data.dbt_updated_at
             and archived_data.dbt_valid_to is null
+            and (
+                {{ strategy.row_changed }}
+            )
         )
     )
 
@@ -243,7 +249,7 @@
       {{ exceptions.raise_compiler_error('Got invalid strategy "{}"'.format(strategy_name)) }}
   {% endif %}
 
-  {% set strategy = strategy_macro("archived_data", "current_data", config) %}
+  {% set strategy = strategy_macro("archived_data", "source_data", config) %}
 
   {% if not target_relation_exists %}
 
@@ -286,7 +292,7 @@
       {% set missing_columns = adapter.get_missing_columns(tmp_relation, target_relation) %}
       {{ create_columns(target_relation, missing_columns) }}
 
-      {% set merge_on = "DBT_INTERNAL_SOURCE.dbt_scd_id = DBT_INTERNAL_DEST.dbt_scd_id" %}
+      {% set merge_on = 'DBT_INTERNAL_SOURCE.dbt_scd_id = DBT_INTERNAL_DEST.dbt_scd_id' %}
       {% set merge_when = [
         {
             "type": "matched",

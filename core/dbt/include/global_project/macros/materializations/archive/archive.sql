@@ -1,16 +1,4 @@
 {#
-    Create SCD Hash SQL fields cross-db
-#}
-
-{% macro archive_hash_arguments(args) %}
-  {{ adapter_macro('archive_hash_arguments', args) }}
-{% endmacro %}
-
-{% macro default__archive_hash_arguments(args) %}
-    md5({% for arg in args %}coalesce(cast({{ arg }} as varchar ), '') {% if not loop.last %} || '|' || {% endif %}{% endfor %})
-{% endmacro %}
-
-{#
     Add new columns to the table if applicable
 #}
 {% macro create_columns(relation, columns) %}
@@ -23,77 +11,6 @@
       alter table {{ relation }} add column "{{ column.name }}" {{ column.data_type }};
     {% endcall %}
   {% endfor %}
-{% endmacro %}
-
-{% macro archive_get_time() -%}
-  {{ adapter_macro('archive_get_time') }}
-{%- endmacro %}
-
-{% macro default__archive_get_time() -%}
-  {{ current_timestamp() }}
-{%- endmacro %}
-
-{#-- TODO : This doesn't belong here #}
-{% macro snowflake__archive_get_time() -%}
-  to_timestamp_ntz({{ current_timestamp() }})
-{%- endmacro %}
-
-{% macro timestamp_strategy(archived_rel, current_rel, config) %}
-
-    {% set updated_at = config['updated_at'] %}
-    {% set row_changed_expr -%}
-        ({{ archived_rel }}.{{ updated_at }} < {{ current_rel }}.{{ updated_at }})
-    {%- endset %}
-
-    -- TODO : Use real macro here....
-    {% set primary_key = config['unique_key'] %}
-    {% set scd_id_expr %}
-        md5({{ primary_key }} || {{ updated_at }}::text)
-    {% endset %}
-
-
-    {% do return({
-        "unique_key": primary_key,
-        "updated_at": updated_at,
-        "row_changed": row_changed_expr,
-        "scd_id": scd_id_expr
-    }) %}
-{% endmacro %}
-
-{% macro check_col_strategy(archived_rel, current_rel, config) %}
-    {% set check_cols = config['check_cols'] %}
-
-    {# TODO 
-    {% if check_cols == 'all' %}
-    {% set check_cols = source_columns | map(attribute='name') | list %}
-    #}
-    {% set updated_at = archive_get_time() %}
-
-    {% set row_changed_expr -%}
-        (
-        {% for col in check_cols %}
-            {{ archived_rel }}.{{ col }} != {{ current_rel }}.{{ col }}
-            {%- if not loop.last %} or {% endif %}
-        {% endfor %}
-        )
-    {%- endset %}
-
-    {% set primary_key = config['unique_key'] %}
-    {% set scd_id_expr %}
-        md5(
-            concat({% for col in check_cols %}
-                cast({{ col }} as text),
-                '-' {% if not loop.last %} , {% endif %}
-            {% endfor %})
-        )
-    {% endset %}
-
-    {% do return({
-        "unique_key": primary_key,
-        "updated_at": updated_at,
-        "row_changed": row_changed_expr,
-        "scd_id": scd_id_expr
-    }) %}
 {% endmacro %}
 
 
@@ -141,6 +58,7 @@
     select * from updates
 
 {%- endmacro %}
+
 
 {% macro archive_insert_sql(strategy, source_sql, target_relation, source_columns) -%}
 
@@ -205,6 +123,7 @@
 
 {% endmacro %}
 
+
 {% macro get_or_create_relation(database, schema, identifier, type) %}
   {%- set target_relation = adapter.get_relation(database=database, schema=schema, identifier=identifier) %}
 
@@ -219,6 +138,30 @@
       type=type
   ) -%}
   {% do return([false, new_relation]) %}
+{% endmacro %}
+
+
+{% macro build_staging_relation(target_relation, strategy, sql) %}
+
+      {# TODO : Be smarter about database/schema names for temp tables! #}
+      {%- set tmp_relation = api.Relation.create(
+            identifier=target_relation.identifier ~ "__dbt_tmp") -%}
+
+      {% set insert_sql = archive_insert_sql(strategy, sql, target_relation) %}
+      {% set update_sql = archive_update_sql(strategy, sql, target_relation) %}
+
+      {% call statement('build_staging_relation') %}
+        {{ create_table_as(True, tmp_relation, insert_sql) }}
+
+        insert into {{ tmp_relation }} (dbt_change_type, dbt_scd_id, dbt_valid_to)
+        select dbt_change_type, dbt_scd_id, dbt_valid_to
+        from (
+            {{ update_sql }}
+        ) as sbq
+      {% endcall %}
+
+      {{ return(tmp_relation) }}
+
 {% endmacro %}
 
 
@@ -246,14 +189,7 @@
     {% do exceptions.relation_wrong_type(target_relation, 'table') %}
   {%- endif -%}
 
-  {% if strategy_name == 'timestamp' %}
-      {% set strategy_macro = timestamp_strategy %}
-  {% elif strategy_name == 'check' %}
-      {% set strategy_macro = check_col_strategy  %}
-  {% else %}
-      {{ exceptions.raise_compiler_error('Got invalid strategy "{}"'.format(strategy_name)) }}
-  {% endif %}
-
+  {% set strategy_macro = strategy_dispatch(strategy_name) %}
   {% set strategy = strategy_macro("archived_data", "source_data", config) %}
 
   {% if not target_relation_exists %}
@@ -267,41 +203,27 @@
 
       {{ adapter.valid_archive_target(target_relation) }}
 
-      {# TODO : Be smarter about database/schema names for temp tables! #}
-      {%- set tmp_relation = api.Relation.create(
-            identifier=target_table ~ "__dbt_tmp") -%}
+      {% set tmp_relation = build_staging_relation(target_relation, strategy, model['injected_sql']) %}
+      {% set source_columns = adapter.get_columns_in_relation(tmp_relation) %}
 
-      {% set insert_sql = archive_insert_sql(strategy, model['injected_sql'], target_relation) %}
-
-      {% call statement('gen_updates') %}
-        {{ create_table_as(True, tmp_relation, insert_sql) }}
-      {% endcall %}
-
-      {% call statement('gen_updates') %}
-        {% set update_sql = archive_update_sql(strategy, model['injected_sql'], target_relation) %}
-        insert into {{ tmp_relation }} (dbt_change_type, dbt_scd_id, dbt_valid_to)
-        select
-            dbt_change_type,
-            dbt_scd_id,
-            dbt_valid_to
-
-        from (
-            {{ update_sql }}
-        ) as sbq
-      {% endcall %}
-
-      {%- set source_columns = adapter.get_columns_in_relation(tmp_relation) -%}
       {# TODO : Make this take a relation #}
-      {{ adapter.expand_target_column_types(temp_table=target_table ~ "__dbt_tmp",
-                                            to_relation=target_relation) }}
+      {% do adapter.expand_target_column_types(temp_table=target_table ~ "__dbt_tmp",
+                                            to_relation=target_relation) %}
 
-      {% set missing_columns = adapter.get_missing_columns(tmp_relation, target_relation) %}
-      {% set missing_columns = missing_columns | rejectattr("name", "equalto", "dbt_change_type") | list %}
-      {{ create_columns(target_relation, missing_columns) }}
+      {% set missing_columns = adapter.get_missing_columns(tmp_relation, target_relation)
+                               | rejectattr("name", "equalto", "dbt_change_type")
+                               | list %}
 
-      {% set dest_columns = source_columns | rejectattr("name", "equalto", "dbt_change_type") | list %}
+      {% set dest_columns = source_columns
+                            | rejectattr("name", "equalto", "dbt_change_type")
+                            | list %}
 
-      {% set merge_on = 'DBT_INTERNAL_SOURCE.dbt_scd_id = DBT_INTERNAL_DEST.dbt_scd_id and DBT_INTERNAL_DEST.dbt_valid_to is null' %}
+      {% do create_columns(target_relation, missing_columns) %}
+
+      {% set merge_on -%}
+          DBT_INTERNAL_SOURCE.dbt_scd_id = DBT_INTERNAL_DEST.dbt_scd_id and DBT_INTERNAL_DEST.dbt_valid_to is null
+      {%- endset %}
+
       {% set merge_when = [
         {
             "type": "matched",

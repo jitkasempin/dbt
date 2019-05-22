@@ -58,16 +58,11 @@
   {{ current_timestamp() }}
 {%- endmacro %}
 
-{#-- TODO : This doesn't belong here #}
-{% macro snowflake__archive_get_time() -%}
-  to_timestamp_ntz({{ current_timestamp() }})
-{%- endmacro %}
-
 
 {#
     Core strategy definitions
 #}
-{% macro archive_timestamp_strategy(archived_rel, current_rel, config) %}
+{% macro archive_timestamp_strategy(node, archived_rel, current_rel, config) %}
     {% set primary_key = config['unique_key'] %}
     {% set updated_at = config['updated_at'] %}
 
@@ -86,10 +81,18 @@
 {% endmacro %}
 
 
-{% macro archive_check_strategy(archived_rel, current_rel, config) %}
+{% macro archive_check_strategy(node, archived_rel, current_rel, config) %}
+    {% set check_cols_config = config['check_cols'] %}
     {% set primary_key = config['unique_key'] %}
-    {% set check_cols = config['check_cols'] %}
     {% set updated_at = archive_get_time() %}
+
+    {% if check_cols_config == 'all' %}
+        {% set check_cols = get_columns_in_query(node['injected_sql']) %}
+    {% elif check_cols_config is iterable and (check_cols_config | length) > 0 %}
+        {% set check_cols = check_cols_config %}
+    {% else %}
+        {% do exceptions.raise_compiler_error("Invalid value for 'check_cols': " ~ check_cols_config) %}
+    {% endif %}
 
     {% set row_changed_expr -%}
         (

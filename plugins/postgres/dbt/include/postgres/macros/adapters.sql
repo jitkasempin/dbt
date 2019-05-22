@@ -91,3 +91,7 @@
 {% macro postgres__current_timestamp() -%}
   now()
 {%- endmacro %}
+
+{% macro postgres__archive_get_time() -%}
+  {{ current_timestamp() }}::timestamp without time zone
+{%- endmacro %}

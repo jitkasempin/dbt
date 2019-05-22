@@ -171,10 +171,11 @@
 {% macro redshift__check_schema_exists(information_schema, schema) -%}
   {{ return(postgres__check_schema_exists(information_schema, schema)) }}
 {%- endmacro %}
-list_schemas
-
-%}
 
 {% macro redshift__current_timestamp() -%}
   getdate()
+{%- endmacro %}
+
+{% macro redshift__archive_get_time() -%}
+  {{ current_timestamp() }}::timestamp
 {%- endmacro %}

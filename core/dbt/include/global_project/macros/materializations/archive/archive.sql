@@ -35,7 +35,10 @@
 
     archived_data as (
 
-        select * from {{ target_relation }}
+        select *,
+            {{ strategy.unique_key }} as dbt_pk
+
+        from {{ target_relation }}
 
     ),
 
@@ -82,7 +85,10 @@
 
     archived_data as (
 
-        select * from {{ target_relation }}
+        select *,
+            {{ strategy.unique_key }} as dbt_pk
+
+        from {{ target_relation }}
 
     ),
 
@@ -112,7 +118,6 @@
 {% macro build_archive_table(strategy, sql) %}
 
     select *,
-        {{ strategy.unique_key }} as dbt_pk,
         {{ strategy.updated_at }} as dbt_updated_at,
         {{ strategy.scd_id }} as dbt_scd_id,
         {{ strategy.updated_at }} as dbt_valid_from,
@@ -190,7 +195,7 @@
   {%- endif -%}
 
   {% set strategy_macro = strategy_dispatch(strategy_name) %}
-  {% set strategy = strategy_macro("archived_data", "source_data", config) %}
+  {% set strategy = strategy_macro(model, "archived_data", "source_data", config) %}
 
   {% if not target_relation_exists %}
 
@@ -210,12 +215,15 @@
       {% do adapter.expand_target_column_types(temp_table=target_table ~ "__dbt_tmp",
                                             to_relation=target_relation) %}
 
+      {% set excluded_cols = ['dbt_change_type', 'dbt_pk'] %}
       {% set missing_columns = adapter.get_missing_columns(tmp_relation, target_relation)
-                               | rejectattr("name", "equalto", "dbt_change_type")
+                               | rejectattr("name", "in", excluded_cols)
+                               | rejectattr("name", "in", excluded_cols | upper)
                                | list %}
 
       {% set dest_columns = source_columns
-                            | rejectattr("name", "equalto", "dbt_change_type")
+                            | rejectattr("name", "in", excluded_cols)
+                            | rejectattr("name", "in", excluded_cols | upper)
                             | list %}
 
       {% do create_columns(target_relation, missing_columns) %}

@@ -28,6 +28,18 @@
   {%- endif -%}
 {%- endmacro %}
 
+{% macro get_columns_in_query(select_sql) %}
+    {% call statement('get_columns_in_query', fetch_result=True, auto_begin=False) -%}
+        select * from (
+            {{ select_sql }}
+        ) as __dbt_sbq
+        where false
+        limit 0
+    {% endcall %}
+
+    {{ return(load_result('get_columns_in_query').table.columns | map(attribute='name') | list) }}
+{% endmacro %}
+
 {% macro create_schema(database_name, schema_name) -%}
   {{ adapter_macro('create_schema', database_name, schema_name) }}
 {% endmacro %}

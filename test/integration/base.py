@@ -939,7 +939,9 @@ class DBTIntegrationTest(unittest.TestCase):
 
         text_types = {'text', 'character varying', 'character', 'varchar'}
 
-        self.assertEqual(len(table_a_result), len(table_b_result))
+        self.assertEqual(len(table_a_result), len(table_b_result),
+                         "{} vs. {}".format(table_a_result, table_b_result))
+
         for a_column, b_column in zip(table_a_result, table_b_result):
             a_name, a_type, a_size = a_column
             b_name, b_type, b_size = b_column

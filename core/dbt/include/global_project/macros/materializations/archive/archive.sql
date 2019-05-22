@@ -82,10 +82,10 @@
     {% set scd_id_expr %}
         md5(
             concat({% for col in check_cols %}
-                cast({{ col }} as text) {% if not loop.last %} , {% endif %}
-
+                cast({{ col }} as text),
+                '-' {% if not loop.last %} , {% endif %}
             {% endfor %})
-        md5(cast({{ primary_key }} as text) || cast({{ 'name' }} as text))
+        )
     {% endset %}
 
     {% do return({
@@ -125,6 +125,7 @@
     updates as (
 
         select
+            'update' as dbt_change_type,
             archived_data.dbt_pk,
             archived_data.dbt_scd_id,
             source_data.dbt_updated_at as dbt_valid_to
@@ -170,6 +171,7 @@
     insertions as (
 
         select
+            'insert' as dbt_change_type,
             source_data.*
 
         from source_data
@@ -230,8 +232,7 @@
   {%- set strategy_name = config.get('strategy') -%}
   {%- set unique_key = config.get('unique_key') %}
 
-  {% set information_schema = api.Relation.create(database=target_database).information_schema() %}
-  {% if not check_schema_exists(information_schema, target_schema) %}
+  {% if not adapter.check_schema_exists(target_database, target_schema) %}
     {% do create_schema(target_database, target_schema) %}
   {% endif %}
 
@@ -278,8 +279,9 @@
 
       {% call statement('gen_updates') %}
         {% set update_sql = archive_update_sql(strategy, model['injected_sql'], target_relation) %}
-        insert into {{ tmp_relation }} (dbt_scd_id, dbt_valid_to)
+        insert into {{ tmp_relation }} (dbt_change_type, dbt_scd_id, dbt_valid_to)
         select
+            dbt_change_type,
             dbt_scd_id,
             dbt_valid_to
 
@@ -294,13 +296,17 @@
                                             to_relation=target_relation) }}
 
       {% set missing_columns = adapter.get_missing_columns(tmp_relation, target_relation) %}
+      {% set missing_columns = missing_columns | rejectattr("name", "equalto", "dbt_change_type") | list %}
       {{ create_columns(target_relation, missing_columns) }}
 
-      {% set merge_on = 'DBT_INTERNAL_SOURCE.dbt_scd_id = DBT_INTERNAL_DEST.dbt_scd_id' %}
+      {% set dest_columns = source_columns | rejectattr("name", "equalto", "dbt_change_type") | list %}
+
+      {% set merge_on = 'DBT_INTERNAL_SOURCE.dbt_scd_id = DBT_INTERNAL_DEST.dbt_scd_id and DBT_INTERNAL_DEST.dbt_valid_to is null' %}
       {% set merge_when = [
         {
             "type": "matched",
             "action": "update",
+            "predicate": "and DBT_INTERNAL_SOURCE.dbt_change_type = 'update'",
             "columns": [
                 api.Column.create('dbt_valid_to', 'timestamp')
             ]
@@ -308,7 +314,8 @@
         {
             "type": "not matched",
             "action": "insert",
-            "columns": source_columns
+            "predicate": "and DBT_INTERNAL_SOURCE.dbt_change_type = 'insert'",
+            "columns": dest_columns
         }
       ] %}
 

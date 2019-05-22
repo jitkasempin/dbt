@@ -31,15 +31,17 @@
 
     {% for clause in merge_when %}
         {% if clause.type == 'matched' and clause.action == 'update' %}
-            when matched then update set {% for column in clause.columns -%}
+            when matched {{ clause.predicate }}
+            then update set {% for column in clause.columns -%}
                 {{ column.name }} = DBT_INTERNAL_SOURCE.{{ column.name }}
                 {%- if not loop.last %}, {%- endif %}
             {%- endfor %}
         {% elif clause.type == 'matched' and clause.action == 'delete' %}
-            when matched then delete
+            when matched {{ clause.predicate }} then delete
         {% elif clause.type == 'not matched' and clause.action == 'insert' %}
             {%- set cols_csv = clause.columns | map(attribute="name") | join(', ') -%}
-            when not matched then insert
+            when not matched {{ clause.predicate }}
+            then insert
                 ({{ cols_csv }})
             values
                 ({{ cols_csv }})
@@ -60,11 +62,11 @@
                 {{ column.name }} = DBT_INTERNAL_SOURCE.{{ column.name }}
             {% endfor %}
             from {{ source }} as DBT_INTERNAL_SOURCE
-            where {{ merge_on }};
+            where {{ merge_on }} {{ clause.predicate }};
         {% elif clause.type == 'matched' and clause.action == 'delete' %}
             delete from {{ target }} as DBT_INTERNAL_DEST
             using {{ source }} as DBT_INTERNAL_SOURCE
-            where {{ merge_on }};
+            where {{ merge_on }} {{ clause.predicate }};
         {% elif clause.type == 'not matched' and clause.action == 'insert' %}
             insert into {{ target }} ({{ cols_csv }})
             select {% for column in clause.columns -%}
@@ -72,10 +74,10 @@
             {%- endfor %}
             from {{ source }} as DBT_INTERNAL_SOURCE
             where not exists(
-                select *
+                select 1
                 from {{ target }} as DBT_INTERNAL_DEST
                 where {{ merge_on }}
-            )
+            ) {{ clause.predicate }}
             ;
         {% else %}
             {% do exceptions.raise_compiler_error("The specified merge clause for " ~ target ~ " is not supported:\n" ~ clause) %}

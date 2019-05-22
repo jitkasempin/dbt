@@ -387,6 +387,7 @@ class BaseAdapter(object):
             '`list_schemas` is not implemented for this adapter!'
         )
 
+    @available.parse(lambda *a, **k: False)
     def check_schema_exists(self, database, schema):
         """Check if a schema exists.
 

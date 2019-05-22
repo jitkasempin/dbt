@@ -55,7 +55,7 @@ def ref(db_wrapper, model, config, manifest):
                 identifier=add_ephemeral_model_prefix(
                     target_model_name)).quote(identifier=False)
         else:
-            return adapter.Relation.create_from_node(config, target_model)
+            return adapter.Relation.create_from(config, target_model)
 
     return do_ref
 

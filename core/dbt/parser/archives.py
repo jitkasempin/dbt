@@ -87,11 +87,17 @@ class ArchiveParser(MacrosKnownParser):
                                       archive.package_name,
                                       archive.name)
 
-            to_return[node_path] = self.parse_node(
+            parsed_node = self.parse_node(
                 archive,
                 node_path,
                 self.all_projects.get(archive.package_name),
                 archive_config=archive_config)
+
+            # TODO : Test this
+            parsed_node.database = parsed_node.config['target_database']
+            parsed_node.schema = parsed_node.config['target_schema']
+
+            to_return[node_path] = parsed_node
 
         return to_return
 
@@ -138,7 +144,10 @@ class ArchiveBlockParser(BaseSqlParser):
     def validate_archives(node):
         if node.resource_type == NodeType.Archive:
             try:
+                node.database = node.config['target_database']
+                node.schema = node.config['target_schema']
                 return ParsedArchiveNode(**node.to_shallow_dict())
+
             except dbt.exceptions.JSONValidationException as exc:
                 raise dbt.exceptions.CompilationException(str(exc), node)
         else:

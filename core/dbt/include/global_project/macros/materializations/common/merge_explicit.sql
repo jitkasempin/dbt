@@ -1,86 +1,54 @@
 
-{% macro explicit_get_merge_sql(target, source, merge_on, merge_when) -%}
-  {{ adapter_macro('explicit_get_merge_sql', target, source, merge_on, merge_when) }}
+{% macro archive_merge_sql(target, source, update_cols, insert_cols) -%}
+  {{ adapter_macro('archive_merge_sql', target, source, update_cols, insert_cols) }}
 {%- endmacro %}
 
 
-{#
-    merge_on: <string>
-        "DBT_INTERNAL_SOURCE.id = DBT_INTERNAL_DEST.id"
+{% macro default__archive_merge_sql(target, source, update_cols, insert_cols) -%}
+    {%- set insert_cols_csv = insert_cols| map(attribute="name") | join(', ') -%}
 
-    merge_when: list<dict>:
-        [
-            {
-                "type": "matched",
-                "action": "update",
-                "columns": ["column_1", ....]
-            },
-            {
-                "type": "not matched",
-                "action": "insert",
-                "columns": ["column_1", ....]
-            },
-            ...
-        ]
-#}
-
-{% macro default__explicit_get_merge_sql(target, source, merge_on, merge_when) -%}
     merge into {{ target }} as DBT_INTERNAL_DEST
     using {{ source }} as DBT_INTERNAL_SOURCE
-    on {{ merge_on }}
+    on DBT_INTERNAL_SOURCE.dbt_scd_id = DBT_INTERNAL_DEST.dbt_scd_id
+      and DBT_INTERNAL_DEST.dbt_valid_to is null
 
-    {% for clause in merge_when %}
-        {% if clause.type == 'matched' and clause.action == 'update' %}
-            when matched {{ clause.predicate }}
-            then update set {% for column in clause.columns -%}
-                {{ column.name }} = DBT_INTERNAL_SOURCE.{{ column.name }}
-                {%- if not loop.last %}, {%- endif %}
-            {%- endfor %}
-        {% elif clause.type == 'matched' and clause.action == 'delete' %}
-            when matched {{ clause.predicate }} then delete
-        {% elif clause.type == 'not matched' and clause.action == 'insert' %}
-            {%- set cols_csv = clause.columns | map(attribute="name") | join(', ') -%}
-            when not matched {{ clause.predicate }}
-            then insert
-                ({{ cols_csv }})
-            values
-                ({{ cols_csv }})
-        {% else %}
-            {% do exceptions.raise_compiler_error("The specified merge clause for " ~ target ~ " is not supported:\n" ~ clause) %}
-        {% endif %}
-    {% endfor %}
+    when matched and dbt_change_type = 'update'
+    then update set {% for column in update_cols -%}
+        {{ column.name }} = DBT_INTERNAL_SOURCE.{{ column.name }} {%- if not loop.last %}, {%- endif %}
+    {%- endfor %}
+    when not matched and dbt_change_type = 'insert'
+    then insert
+        ({{ insert_cols_csv }})
+    values
+        ({{ insert_cols_csv }})
+    ;
 {% endmacro %}
 
 
-{% macro postgres__explicit_get_merge_sql(target, source, merge_on, merge_when) -%}
-    {% for clause in merge_when %}
-        {%- set cols_csv = clause.columns | map(attribute="name") | join(', ') -%}
+{% macro postgres__archive_merge_sql(target, source, update_cols, insert_cols) -%}
+    {%- set insert_cols_csv = insert_cols | map(attribute="name") | join(', ') -%}
 
-        {% if clause.type == 'matched' and clause.action == 'update' %}
-            update {{ target }} as DBT_INTERNAL_DEST
-            set {% for column in clause.columns -%}
-                {{ column.name }} = DBT_INTERNAL_SOURCE.{{ column.name }}
-            {% endfor %}
-            from {{ source }} as DBT_INTERNAL_SOURCE
-            where {{ merge_on }} {{ clause.predicate }};
-        {% elif clause.type == 'matched' and clause.action == 'delete' %}
-            delete from {{ target }} as DBT_INTERNAL_DEST
-            using {{ source }} as DBT_INTERNAL_SOURCE
-            where {{ merge_on }} {{ clause.predicate }};
-        {% elif clause.type == 'not matched' and clause.action == 'insert' %}
-            insert into {{ target }} ({{ cols_csv }})
-            select {% for column in clause.columns -%}
-                DBT_INTERNAL_SOURCE.{{ column.name }} {%- if not loop.last %}, {%- endif %}
-            {%- endfor %}
-            from {{ source }} as DBT_INTERNAL_SOURCE
-            where not exists(
-                select 1
-                from {{ target }} as DBT_INTERNAL_DEST
-                where {{ merge_on }}
-            ) {{ clause.predicate }}
-            ;
-        {% else %}
-            {% do exceptions.raise_compiler_error("The specified merge clause for " ~ target ~ " is not supported:\n" ~ clause) %}
-        {% endif %}
+    update {{ target }} as DBT_INTERNAL_DEST
+    set {% for column in update_cols -%}
+        {{ column.name }} = DBT_INTERNAL_SOURCE.{{ column.name }}
     {% endfor %}
+    from {{ source }} as DBT_INTERNAL_SOURCE
+    where DBT_INTERNAL_SOURCE.dbt_scd_id = DBT_INTERNAL_DEST.dbt_scd_id
+      and DBT_INTERNAL_SOURCE.dbt_change_type = 'update'
+      and DBT_INTERNAL_DEST.dbt_valid_to is null
+    ;
+
+    insert into {{ target }} ({{ insert_cols_csv }})
+    select {% for column in insert_cols -%}
+        DBT_INTERNAL_SOURCE.{{ column.name }} {%- if not loop.last %}, {%- endif %}
+    {%- endfor %}
+    from {{ source }} as DBT_INTERNAL_SOURCE
+    where DBT_INTERNAL_SOURCE.dbt_change_type = 'insert'
+      and not exists(
+        select 1
+        from {{ target }} as DBT_INTERNAL_DEST
+        where DBT_INTERNAL_SOURCE.dbt_scd_id = DBT_INTERNAL_DEST.dbt_scd_id
+          and DBT_INTERNAL_DEST.dbt_valid_to is null
+    )
+    ;
 {% endmacro %}

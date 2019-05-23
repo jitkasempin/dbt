@@ -228,29 +228,14 @@
 
       {% do create_columns(target_relation, missing_columns) %}
 
-      {% set merge_on -%}
-          DBT_INTERNAL_SOURCE.dbt_scd_id = DBT_INTERNAL_DEST.dbt_scd_id and DBT_INTERNAL_DEST.dbt_valid_to is null
-      {%- endset %}
-
-      {% set merge_when = [
-        {
-            "type": "matched",
-            "action": "update",
-            "predicate": "and DBT_INTERNAL_SOURCE.dbt_change_type = 'update'",
-            "columns": [
-                api.Column.create('dbt_valid_to', 'timestamp')
-            ]
-        },
-        {
-            "type": "not matched",
-            "action": "insert",
-            "predicate": "and DBT_INTERNAL_SOURCE.dbt_change_type = 'insert'",
-            "columns": dest_columns
-        }
-      ] %}
-
       {% call statement('main') %}
-        {{ explicit_get_merge_sql(target_relation, tmp_relation, merge_on, merge_when) }}
+          {{ archive_merge_sql(
+                target = target_relation,
+                source = tmp_relation,
+                update_cols = [api.Column.create('dbt_valid_to', 'timestamp')],
+                insert_cols = dest_columns
+             )
+          }}
       {% endcall %}
 
   {% endif %}

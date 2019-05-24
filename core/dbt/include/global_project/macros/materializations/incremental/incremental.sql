@@ -55,7 +55,7 @@
 
      {%- endcall -%}
 
-     {{ adapter.expand_target_column_types(temp_table=tmp_identifier,
+     {{ adapter.expand_target_column_types(from_relation=tmp_relation,
                                            to_relation=target_relation) }}
 
      {%- call statement('main') -%}

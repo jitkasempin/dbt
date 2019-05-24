@@ -83,17 +83,6 @@
 {% endmacro %}
 
 
-{% macro create_archive_table(relation, columns) -%}
-  {{ adapter_macro('create_archive_table', relation, columns) }}
-{%- endmacro %}
-
-{% macro default__create_archive_table(relation, columns) -%}
-  create table if not exists {{ relation }} (
-    {{ column_list_for_create_table(columns) }}
-  );
-{% endmacro %}
-
-
 {% macro get_catalog(information_schemas) -%}
   {{ return(adapter_macro('get_catalog', information_schemas)) }}
 {%- endmacro %}
@@ -260,4 +249,29 @@
     from {{ source }}
   {% endcall %}
   {{ return(load_result('check_schema_exists').table) }}
+{% endmacro %}
+
+{% macro make_temp_relation(base_relation, suffix='__dbt_tmp') %}
+  {{ return(adapter_macro('make_temp_relation', base_relation, suffix))}}
+{% endmacro %}
+
+{% macro default__make_temp_relation(base_relation, suffix) %}
+    {% set tmp_identifier = base_relation.identifier ~ suffix %}
+    {% set tmp_relation = base_relation.incorporate(identifier=tmp_identifier) -%}
+    {% do return(tmp_relation) %}
+{% endmacro %}
+
+
+{% macro postgres__make_temp_relation(base_relation, suffix) %}
+    {% set tmp_identifier = base_relation.identifier ~ suffix %}
+    {% set tmp_relation = base_relation.incorporate(identifier=tmp_identifier) -%}
+    {% do return(tmp_relation.include(
+            database=false,
+            schema=false,
+            identifier=true
+    )) %}
+{% endmacro %}
+
+{% macro redshift__make_temp_relation(base_relation, suffix) %}
+    {% do return(postgres__make_temp_relation(base_relation, suffix)) %}
 {% endmacro %}

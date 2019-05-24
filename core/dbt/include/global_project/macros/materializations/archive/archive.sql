@@ -14,7 +14,7 @@
 {% endmacro %}
 
 
-{% macro archive_update_sql(strategy, source_sql, target_relation, source_columns) -%}
+{% macro archive_staging_table_sql(strategy, source_sql, target_relation, source_columns) -%}
 
     with archive_query as (
 
@@ -42,61 +42,12 @@
 
     ),
 
-    updates as (
-
-        select
-            'update' as dbt_change_type,
-            archived_data.dbt_pk,
-            archived_data.dbt_scd_id,
-            source_data.dbt_updated_at as dbt_valid_to
-
-        from source_data
-        join archived_data on archived_data.dbt_pk = source_data.dbt_pk
-        where archived_data.dbt_valid_to is null
-          and (
-            {{ strategy.row_changed }}
-          )
-    )
-
-    select * from updates
-
-{%- endmacro %}
-
-
-{% macro archive_insert_sql(strategy, source_sql, target_relation, source_columns) -%}
-
-    with archive_query as (
-
-        {{ source_sql }}
-
-    ),
-
-    source_data as (
-
-        select *,
-            {{ strategy.scd_id }} as dbt_scd_id,
-            {{ strategy.unique_key }} as dbt_pk,
-            {{ strategy.updated_at }} as dbt_updated_at,
-            {{ strategy.updated_at }} as dbt_valid_from,
-            nullif({{ strategy.updated_at }}, {{ strategy.updated_at }}) as dbt_valid_to
-
-        from archive_query
-    ),
-
-    archived_data as (
-
-        select *,
-            {{ strategy.unique_key }} as dbt_pk
-
-        from {{ target_relation }}
-
-    ),
-
     insertions as (
 
         select
             'insert' as dbt_change_type,
-            source_data.*
+            source_data.*,
+            nullif({{ strategy.updated_at }}, {{ strategy.updated_at }}) as dbt_valid_to
 
         from source_data
         left outer join archived_data on archived_data.dbt_pk = source_data.dbt_pk
@@ -108,11 +59,29 @@
                 {{ strategy.row_changed }}
             )
         )
+
+    ),
+
+    updates as (
+
+        select
+            'update' as dbt_change_type,
+            source_data.*,
+            source_data.dbt_updated_at as dbt_valid_to
+
+        from source_data
+        join archived_data on archived_data.dbt_pk = source_data.dbt_pk
+        where archived_data.dbt_valid_to is null
+          and (
+            {{ strategy.row_changed }}
+          )
     )
 
     select * from insertions
+    union all
+    select * from updates
 
-{% endmacro %}
+{%- endmacro %}
 
 
 {% macro build_archive_table(strategy, sql) %}
@@ -143,30 +112,6 @@
       type=type
   ) -%}
   {% do return([false, new_relation]) %}
-{% endmacro %}
-
-
-{% macro build_staging_relation(target_relation, strategy, sql) %}
-
-      {# TODO : Be smarter about database/schema names for temp tables! #}
-      {%- set tmp_relation = api.Relation.create(
-            identifier=target_relation.identifier ~ "__dbt_tmp") -%}
-
-      {% set insert_sql = archive_insert_sql(strategy, sql, target_relation) %}
-      {% set update_sql = archive_update_sql(strategy, sql, target_relation) %}
-
-      {% call statement('build_staging_relation') %}
-        {{ create_table_as(True, tmp_relation, insert_sql) }}
-
-        insert into {{ tmp_relation }} (dbt_change_type, dbt_scd_id, dbt_valid_to)
-        select dbt_change_type, dbt_scd_id, dbt_valid_to
-        from (
-            {{ update_sql }}
-        ) as sbq
-      {% endcall %}
-
-      {{ return(tmp_relation) }}
-
 {% endmacro %}
 
 
@@ -208,12 +153,17 @@
 
       {{ adapter.valid_archive_target(target_relation) }}
 
-      {% set tmp_relation = build_staging_relation(target_relation, strategy, model['injected_sql']) %}
+      {%- set tmp_relation = make_temp_relation(target_relation) %}
+      {% set merge_sql = archive_staging_table_sql(strategy, sql, target_relation) %}
+
+      {% call statement('build_archive_staging_relation') %}
+        {{ create_table_as(True, tmp_relation, merge_sql) }}
+      {% endcall %}
+
       {% set source_columns = adapter.get_columns_in_relation(tmp_relation) %}
 
-      {# TODO : Make this take a relation #}
-      {% do adapter.expand_target_column_types(temp_table=target_table ~ "__dbt_tmp",
-                                            to_relation=target_relation) %}
+      {% do adapter.expand_target_column_types(from_relation=tmp_relation,
+                                               to_relation=target_relation) %}
 
       {% set excluded_cols = ['dbt_change_type', 'dbt_pk'] %}
       {% set missing_columns = adapter.get_missing_columns(tmp_relation, target_relation)

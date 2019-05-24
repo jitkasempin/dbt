@@ -57,15 +57,6 @@
 {% endmacro %}
 
 
-{% macro redshift__create_archive_table(relation, columns) -%}
-  create table if not exists {{ relation }} (
-    {{ column_list_for_create_table(columns) }}
-  )
-  {{ dist('dbt_updated_at') }}
-  {{ sort('compound', ['dbt_scd_id']) }};
-{%- endmacro %}
-
-
 {% macro redshift__create_schema(database_name, schema_name) -%}
   {{ postgres__create_schema(database_name, schema_name) }}
 {% endmacro %}

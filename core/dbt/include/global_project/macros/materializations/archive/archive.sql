@@ -14,7 +14,7 @@
 {% endmacro %}
 
 
-{% macro archive_staging_table_sql(strategy, source_sql, target_relation, source_columns) -%}
+{% macro archive_staging_table_sql(strategy, source_sql, target_relation) -%}
 
     with archive_query as (
 
@@ -35,17 +35,13 @@
 
     archived_data as (
 
-        select *,
-            {{ strategy.unique_key }} as dbt_pk
-
-        from {{ target_relation }}
+        select * from {{ target_relation }}
 
     ),
 
     insertions as (
 
         select
-            'insert' as dbt_change_type,
             source_data.*,
             nullif({{ strategy.updated_at }}, {{ strategy.updated_at }}) as dbt_valid_to
 
@@ -60,26 +56,9 @@
             )
         )
 
-    ),
-
-    updates as (
-
-        select
-            'update' as dbt_change_type,
-            source_data.*,
-            source_data.dbt_updated_at as dbt_valid_to
-
-        from source_data
-        join archived_data on archived_data.dbt_pk = source_data.dbt_pk
-        where archived_data.dbt_valid_to is null
-          and (
-            {{ strategy.row_changed }}
-          )
     )
 
     select * from insertions
-    union all
-    select * from updates
 
 {%- endmacro %}
 
@@ -87,8 +66,9 @@
 {% macro build_archive_table(strategy, sql) %}
 
     select *,
-        {{ strategy.updated_at }} as dbt_updated_at,
+        {{ strategy.unique_key }} as dbt_pk,
         {{ strategy.scd_id }} as dbt_scd_id,
+        {{ strategy.updated_at }} as dbt_updated_at,
         {{ strategy.updated_at }} as dbt_valid_from,
         nullif({{ strategy.updated_at }}, {{ strategy.updated_at }}) as dbt_valid_to
     from (
@@ -165,25 +145,14 @@
       {% do adapter.expand_target_column_types(from_relation=tmp_relation,
                                                to_relation=target_relation) %}
 
-      {% set excluded_cols = ['dbt_change_type', 'dbt_pk'] %}
-      {% set missing_columns = adapter.get_missing_columns(tmp_relation, target_relation)
-                               | rejectattr("name", "in", excluded_cols)
-                               | rejectattr("name", "in", excluded_cols | upper)
-                               | list %}
-
-      {% set dest_columns = source_columns
-                            | rejectattr("name", "in", excluded_cols)
-                            | rejectattr("name", "in", excluded_cols | upper)
-                            | list %}
-
+      {% set missing_columns = adapter.get_missing_columns(tmp_relation, target_relation) | list %}
       {% do create_columns(target_relation, missing_columns) %}
 
       {% call statement('main') %}
           {{ archive_merge_sql(
                 target = target_relation,
                 source = tmp_relation,
-                update_cols = [api.Column.create('dbt_valid_to', 'timestamp')],
-                insert_cols = dest_columns
+                insert_cols = source_columns
              )
           }}
       {% endcall %}
